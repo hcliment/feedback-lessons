@@ -49,7 +49,7 @@ with pestaña_profesor:
     st.title("Resultados del Test en Directo")
     
     # Añadimos un pequeño selector para que, si una clase se alarga, puedas cambiar el rango de tiempo desde la propia pantalla
-    horas_filtro = st.side_bar.slider("Mostrar respuestas de las últimas (horas):", min_value=1, max_value=8, value=3)
+    horas_filtro = st.sidebar.slider("Mostrar respuestas de las últimas (horas):", min_value=1, max_value=8, value=3)
     
     if st.button("🔄 Actualizar Gráficos"):
         st.rerun()
