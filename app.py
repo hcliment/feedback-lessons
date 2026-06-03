@@ -1,7 +1,7 @@
 import streamlit as st
 from streamlit_gsheets import GSheetsConnection
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 st.set_page_config(page_title="Sistema de Respuestas en Clase", layout="wide")
@@ -17,33 +17,26 @@ with pestaña_alumno:
     st.write("Selecciona la pregunta actual y tu respuesta. Es 100% anónimo.")
     
     with st.form("form_test", clear_on_submit=True):
-        # Desplegable de preguntas (Pregunta 1 a Pregunta 10)
         lista_preguntas = [f"Pregunta {i}" for i in range(1, 11)]
         pregunta_seleccionada = st.selectbox("Selecciona la pregunta:", options=lista_preguntas)
-        
-        # Desplegable de opciones (A, B, C, D)
         respuesta_seleccionada = st.selectbox("Selecciona tu respuesta:", options=["A", "B", "C", "D"])
         
         enviar = st.form_submit_button("Enviar Respuesta")
         
         if enviar:
             try:
-                # Leer datos existentes (ttl=0 para evitar caché)
                 datos_existentes = conn.read(ttl=0)
                 
-                # 1. Capturar la hora del servidor en UTC
-                # 2. Convertirla explícitamente a la zona horaria de España
+                # Capturar hora actual en España
                 zona_espana = ZoneInfo("Europe/Madrid")
                 ahora = datetime.now(zona_espana).strftime("%Y-%m-%d %H:%M:%S")
                 
-                # Crear la nueva fila con la estructura solicitada
                 nueva_fila = pd.DataFrame([{
                     "Fecha y Hora": ahora,
                     "Pregunta": pregunta_seleccionada,
                     "Respuesta": respuesta_seleccionada
                 }])
                 
-                # Combinar y actualizar en Google Sheets
                 datos_actualizados = pd.concat([datos_existentes, nueva_fila], ignore_index=True)
                 conn.update(data=datos_actualizados)
                 
@@ -55,6 +48,9 @@ with pestaña_alumno:
 with pestaña_profesor:
     st.title("Resultados del Test en Directo")
     
+    # Añadimos un pequeño selector para que, si una clase se alarga, puedas cambiar el rango de tiempo desde la propia pantalla
+    horas_filtro = st.side_bar.slider("Mostrar respuestas de las últimas (horas):", min_value=1, max_value=8, value=3)
+    
     if st.button("🔄 Actualizar Gráficos"):
         st.rerun()
         
@@ -63,42 +59,54 @@ with pestaña_profesor:
         df = conn.read(ttl=0)
         df = df.dropna(how="all")
         
-        st.metric(label="Total de respuestas recibidas (todas las preguntas)", value=len(df))
-        
         if not df.empty:
-            st.markdown("---")
-            # Selector para que el profesor elija qué pregunta quiere proyectar en el gráfico
-            lista_preguntas_profesor = [f"Pregunta {i}" for i in range(1, 11)]
-            pregunta_a_mostrar = st.selectbox("📊 Selecciona qué pregunta quieres analizar en pantalla:", options=lista_preguntas_profesor)
+            # 1. Convertir la columna "Fecha y Hora" de texto a formato fecha de pandas para poder operar con ella
+            df["Fecha y Hora"] = pd.to_datetime(df["Fecha y Hora"])
             
-            # Filtrar el DataFrame solo para la pregunta elegida
-            df_filtrado = df[df["Pregunta"] == pregunta_a_mostrar]
+            # 2. Calcular el momento exacto "hace X horas" usando la misma zona horaria
+            zona_espana = ZoneInfo("Europe/Madrid")
+            ahora_mismo = datetime.now(zona_espana)
+            hace_unas_horas = ahora_mismo - timedelta(hours=horas_filtro)
             
-            st.subheader(f"Distribución de respuestas para la {pregunta_a_mostrar}")
-            st.metric(label=f"Alumnos que han respondido a esta pregunta", value=len(df_filtrado))
+            # 3. FILTRAR: Nos quedamos solo con las filas cuya fecha sea posterior al límite que hemos calculado
+            # Como df["Fecha y Hora"] puede no tener zona horaria explícita al leer de Sheets, le quitamos la zona horaria a 'hace_unas_horas' para poder compararlos
+            hace_unas_horas_naive = hace_unas_horas.replace(tzinfo=None)
+            df_reciente = df[df["Fecha y Hora"] >= hace_unas_horas_naive]
             
-            if not df_filtrado.empty:
-                # Contar cuántas veces aparece cada letra (A, B, C, D)
-                conteo_respuestas = df_filtrado["Respuesta"].value_counts()
+            st.metric(label=f"Respuestas recibidas en las últimas {horas_filtro} horas", value=len(df_reciente))
+            
+            if not df_reciente.empty:
+                st.markdown("---")
+                lista_preguntas_profesor = [f"Pregunta {i}" for i in range(1, 11)]
+                pregunta_a_mostrar = st.selectbox("📊 Selecciona qué pregunta quieres analizar en pantalla:", options=lista_preguntas_profesor)
                 
-                # Para asegurar que el gráfico muestre siempre las 4 opciones aunque nadie haya votado a alguna:
-                for letra in ["A", "B", "C", "D"]:
-                    if letra not in conteo_respuestas:
-                        conteo_respuestas[letra] = 0
+                # Filtrar el DataFrame ya recortado por tiempo, ahora por la pregunta elegida
+                df_filtrado = df_reciente[df_reciente["Pregunta"] == pregunta_a_mostrar]
                 
-                # Ordenar el índice para que salga A, B, C, D en orden en el gráfico
-                conteo_respuestas = conteo_respuestas.reindex(["A", "B", "C", "D"])
+                st.subheader(f"Distribución de respuestas recientes para la {pregunta_a_mostrar}")
+                st.metric(label=f"Alumnos que han respondido a esta pregunta en esta sesión", value=len(df_filtrado))
                 
-                # Mostrar gráfico de barras
-                st.bar_chart(conteo_respuestas)
-                
-                # Mostrar tabla con el detalle de las últimas respuestas por si acaso
-                with st.expander("Ver historial de esta pregunta (Anónimo)"):
-                    st.dataframe(df_filtrado[["Fecha y Hora", "Respuesta"]].sort_values(by="Fecha y Hora", ascending=False))
+                if not df_filtrado.empty:
+                    conteo_respuestas = df_filtrado["Respuesta"].value_counts()
+                    
+                    for letra in ["A", "B", "C", "D"]:
+                        if letra not in conteo_respuestas:
+                            conteo_respuestas[letra] = 0
+                    
+                    conteo_respuestas = conteo_respuestas.reindex(["A", "B", "C", "D"])
+                    st.bar_chart(conteo_respuestas)
+                    
+                    with st.expander("Ver historial reciente de esta pregunta (Anónimo)"):
+                        # Mostramos la hora en formato bonito de nuevo para la tabla
+                        df_tabla = df_filtrado.copy()
+                        df_tabla["Fecha y Hora"] = df_tabla["Fecha y Hora"].dt.strftime("%H:%M:%S")
+                        st.dataframe(df_tabla[["Fecha y Hora", "Respuesta"]].sort_values(by="Fecha y Hora", ascending=False))
+                else:
+                    st.info(f"Nadie ha respondido aún a la {pregunta_a_mostrar} en esta sesión.")
             else:
-                st.info(f"Nadie ha respondido aún a la {pregunta_a_mostrar} en esta sesión.")
+                st.info(f"No se han recibido respuestas en las últimas {horas_filtro} horas. Las respuestas antiguas están guardadas de forma segura en tu Google Sheets, pero ocultas en esta pantalla.")
         else:
-            st.info("Esperando las primeras respuestas de los alumnos...")
+            st.info("La hoja de cálculo está completamente vacía.")
             
     except Exception as e:
-        st.warning("Configurando la conexión o esperando datos...")
+        st.warning(f"Esperando datos o configurando la conexión... (Detalle: {e})")
