@@ -1,88 +1,101 @@
 import streamlit as st
 from streamlit_gsheets import GSheetsConnection
 import pandas as pd
+from datetime import datetime
 
-st.set_page_config(page_title="Feedback de Clase", layout="wide")
+st.set_page_config(page_title="Sistema de Respuestas en Clase", layout="wide")
 
-# 1. Establecer la conexión con Google Sheets
-# Streamlit busca automáticamente la URL en el archivo secrets.toml
+# 1. Conexión con Google Sheets
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# Crear las pestañas para el aula
 pestaña_profesor, pestaña_alumno = st.tabs(["📊 Vista del Profesor", "📱 Formulario Alumno"])
 
-# --- VISTA DEL ALUMNO (Formulario) ---
+# --- VISTA DEL ALUMNO ---
 with pestaña_alumno:
-    st.header("Cuestionario Anónimo")
+    st.header("Envía tu respuesta")
+    st.write("Selecciona la pregunta actual y tu respuesta. Es 100% anónimo.")
     
-    with st.form("form_feedback", clear_on_submit=True):
-        ritmo = st.select_slider("1. ¿Qué tal el ritmo de la clase?", options=["Muy lento", "Adecuado", "Muy rápido"], value="Adecuado")
-        comprension = st.slider("2. ¿Cuánto has comprendido hoy? (1 al 5)", 1, 5, 3)
-        comentarios = st.text_area("3. ¿Alguna duda o comentario?")
+    with st.form("form_test", clear_on_submit=True):
+        # Desplegable de preguntas (Pregunta 1 a Pregunta 10)
+        lista_preguntas = [f"Pregunta {i}" for i in range(1, 11)]
+        pregunta_seleccionada = st.selectbox("Selecciona la pregunta:", options=lista_preguntas)
         
-        enviar = st.form_submit_button("Enviar Feedback")
+        # Desplegable de opciones (A, B, C, D)
+        respuesta_seleccionada = st.selectbox("Selecciona tu respuesta:", options=["A", "B", "C", "D"])
+        
+        enviar = st.form_submit_button("Enviar Respuesta")
         
         if enviar:
             try:
-                # Leer los datos existentes para no borrar lo que ya hay
-                datos_existentes = conn.read(ttl=0) # ttl=0 fuerza a leer los datos más frescos
+                # Leer datos existentes (ttl=0 para evitar caché)
+                datos_existentes = conn.read(ttl=0)
                 
-                # Crear la nueva fila con la respuesta del alumno
-                nueva_respuesta = pd.DataFrame([{
-                    "Ritmo": ritmo,
-                    "Comprensión": comprension,
-                    "Comentarios": comentarios
+                # Capturar la fecha y hora actual en formato legible (ej: 2026-06-03 14:30:22)
+                ahora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                
+                # Crear la nueva fila con la estructura solicitada
+                nueva_fila = pd.DataFrame([{
+                    "Fecha y Hora": ahora,
+                    "Pregunta": pregunta_seleccionada,
+                    "Respuesta": respuesta_seleccionada
                 }])
                 
-                # Combinar los datos viejos con los nuevos
-                datos_actualizados = pd.concat([datos_existentes, nueva_respuesta], ignore_index=True)
-                
-                # Volver a escribir todo el bloque en Google Sheets
+                # Combinar y actualizar en Google Sheets
+                datos_actualizados = pd.concat([datos_existentes, nueva_fila], ignore_index=True)
                 conn.update(data=datos_actualizados)
                 
-                st.success("¡Muchas gracias! Tu respuesta se ha guardado de forma anónima.")
+                st.success(f"¡Hecho! Tu respuesta '{respuesta_seleccionada}' para la '{pregunta_seleccionada}' ha sido enviada.")
             except Exception as e:
-                st.error(f"Error al guardar: {e}. Revisa que la hoja esté en modo 'Editor' para cualquiera con el enlace.")
+                st.error(f"Error al guardar: {e}")
 
-# --- VISTA DEL PROFESOR (Resultados) ---
+# --- VISTA DEL PROFESOR ---
 with pestaña_profesor:
-    st.title("Resultados del Feedback en Directo")
+    st.title("Resultados del Test en Directo")
     
-    # Botón manual para actualizar los datos en la pantalla
     if st.button("🔄 Actualizar Gráficos"):
         st.rerun()
         
     try:
-        # Leer datos de la nube (ttl=0 para evitar que use la caché vieja)
+        # Leer datos de la nube
         df = conn.read(ttl=0)
-        
-        # Eliminar filas completamente vacías si las hubiera
         df = df.dropna(how="all")
         
-        st.metric(label="Alumnos que han respondido", value=len(df))
+        st.metric(label="Total de respuestas recibidas (todas las preguntas)", value=len(df))
         
         if not df.empty:
-            col1, col2 = st.columns(2)
+            st.markdown("---")
+            # Selector para que el profesor elija qué pregunta quiere proyectar en el gráfico
+            lista_preguntas_profesor = [f"Pregunta {i}" for i in range(1, 11)]
+            pregunta_a_mostrar = st.selectbox("📊 Selecciona qué pregunta quieres analizar en pantalla:", options=lista_preguntas_profesor)
             
-            with col1:
-                st.subheader("Ritmo acumulado")
-                conteo_ritmo = df["Ritmo"].value_counts()
-                st.bar_chart(conteo_ritmo)
+            # Filtrar el DataFrame solo para la pregunta elegida
+            df_filtrado = df[df["Pregunta"] == pregunta_a_mostrar]
+            
+            st.subheader(f"Distribución de respuestas para la {pregunta_a_mostrar}")
+            st.metric(label=f"Alumnos que han respondido a esta pregunta", value=len(df_filtrado))
+            
+            if not df_filtrado.empty:
+                # Contar cuántas veces aparece cada letra (A, B, C, D)
+                conteo_respuestas = df_filtrado["Respuesta"].value_counts()
                 
-            with col2:
-                st.subheader("Nivel de Comprensión")
-                # Asegurar que la columna sea numérica para la media
-                df["Comprensión"] = pd.to_numeric(df["Comprensión"])
-                promedio = df["Comprensión"].mean()
-                st.metric(label="Media de la clase", value=f"{promedio:.1f} / 5")
+                # Para asegurar que el gráfico muestre siempre las 4 opciones aunque nadie haya votado a alguna:
+                for letra in ["A", "B", "C", "D"]:
+                    if letra not in conteo_respuestas:
+                        conteo_respuestas[letra] = 0
                 
-            st.subheader("Comentarios de los alumnos")
-            # Mostrar los comentarios que no estén vacíos
-            for com in df["Comentarios"].dropna():
-                if str(com).strip() != "" and str(com) != "nan":
-                    st.chat_message("user").write(com)
+                # Ordenar el índice para que salga A, B, C, D en orden en el gráfico
+                conteo_respuestas = conteo_respuestas.reindex(["A", "B", "C", "D"])
+                
+                # Mostrar gráfico de barras
+                st.bar_chart(conteo_respuestas)
+                
+                # Mostrar tabla con el detalle de las últimas respuestas por si acaso
+                with st.expander("Ver historial de esta pregunta (Anónimo)"):
+                    st.dataframe(df_filtrado[["Fecha y Hora", "Respuesta"]].sort_values(by="Fecha y Hora", ascending=False))
+            else:
+                st.info(f"Nadie ha respondido aún a la {pregunta_a_mostrar} en esta sesión.")
         else:
-            st.info("Aún no hay respuestas de alumnos en esta sesión.")
+            st.info("Esperando las primeras respuestas de los alumnos...")
             
     except Exception as e:
-        st.warning("Configurando la conexión o esperando datos de la hoja...")
+        st.warning("Configurando la conexión o esperando datos...")
