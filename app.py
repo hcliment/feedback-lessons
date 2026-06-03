@@ -2,6 +2,7 @@ import streamlit as st
 from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 st.set_page_config(page_title="Sistema de Respuestas en Clase", layout="wide")
 
@@ -30,8 +31,10 @@ with pestaña_alumno:
                 # Leer datos existentes (ttl=0 para evitar caché)
                 datos_existentes = conn.read(ttl=0)
                 
-                # Capturar la fecha y hora actual en formato legible (ej: 2026-06-03 14:30:22)
-                ahora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                # 1. Capturar la hora del servidor en UTC
+                # 2. Convertirla explícitamente a la zona horaria de España
+                zona_espana = ZoneInfo("Europe/Madrid")
+                ahora = datetime.now(zona_espana).strftime("%Y-%m-%d %H:%M:%S")
                 
                 # Crear la nueva fila con la estructura solicitada
                 nueva_fila = pd.DataFrame([{
